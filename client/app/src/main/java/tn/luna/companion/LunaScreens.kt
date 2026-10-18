@@ -2,8 +2,10 @@ package tn.luna.companion
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -420,6 +422,7 @@ private fun ProfileScreen(
     onLanguageChange: (String) -> Unit,
     onTokenChange: (String) -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 23.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
@@ -434,6 +437,16 @@ private fun ProfileScreen(
                 "Allow notifications to receive exam reminders at 9 AM during the final 7 days and an occasional gentle chat reminder."
             }
         )
+        if (remindersEnabled && !notificationsAllowed) {
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                )
+            }) {
+                Text("Open notification settings")
+            }
+        }
         SettingSwitch("Evening colors", dark, onDarkChange)
         Text("Luna’s reply language", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

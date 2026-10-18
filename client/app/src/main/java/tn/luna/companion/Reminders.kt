@@ -36,6 +36,14 @@ data class LunaExam(val id: String, val title: String, val date: String) {
 
 internal fun isExamReminderDay(daysUntilExam: Long): Boolean = daysUntilExam in 0..7
 
+internal fun firstExamReminderDate(today: LocalDate, now: LocalTime, daysUntilExam: Long): LocalDate? =
+    when {
+        daysUntilExam < 0 -> null
+        daysUntilExam == 0L && !now.isBefore(LocalTime.of(9, 0)) -> today
+        !now.isBefore(LocalTime.of(9, 0)) -> today.plusDays(1)
+        else -> today
+    }
+
 class ExamStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val gson = Gson()
@@ -91,6 +99,16 @@ internal object ReminderPreferences {
 
     fun lastActivity(context: Context): Long =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getLong(LAST_ACTIVITY, 0L)
+
+    fun examNotifiedOn(context: Context, id: String): String? =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString("exam_notified_$id", null)
+
+    fun recordExamNotification(context: Context, id: String, date: LocalDate) {
+        check(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putString("exam_notified_$id", date.toString()).commit()) {
+            "Could not save exam reminder state."
+        }
+    }
 }
 
 internal object ReminderScheduler {
@@ -120,30 +138,33 @@ internal object ReminderScheduler {
 
     fun scheduleExam(context: Context, exam: LunaExam) {
         if (!ReminderPreferences.enabled(context)) return
-        enqueueExam(context, exam, nextMorningDelay())
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val daysUntil = exam.daysUntil(today)
+        if (daysUntil == 0L && ReminderPreferences.examNotifiedOn(context, exam.id) == today.toString()) return
+        val targetDate = firstExamReminderDate(today, LocalTime.now(zone), daysUntil) ?: return
+        enqueueExam(context, exam, targetDate)
     }
 
     fun cancelExam(context: Context, id: String) {
         WorkManager.getInstance(context).cancelAllWorkByTag("$EXAM_TAG:$id")
     }
 
-    private fun enqueueExam(context: Context, exam: LunaExam, delayMillis: Long) {
+    private fun enqueueExam(context: Context, exam: LunaExam, targetDate: LocalDate) {
+        val targetTime = targetDate.atTime(9, 0).atZone(ZoneId.systemDefault())
+        val delayMillis = Duration.between(java.time.ZonedDateTime.now(), targetTime).toMillis().coerceAtLeast(0)
         val request = OneTimeWorkRequestBuilder<LunaReminderWorker>()
             .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
             .setInputData(Data.Builder().putString(KIND, EXAM).putString(EXAM_ID, exam.id).build())
             .addTag(EXAM_TAG)
             .addTag("$EXAM_TAG:${exam.id}")
             .build()
-        val today = LocalDate.now(ZoneId.systemDefault())
-        val nextDate = if (LocalTime.now(ZoneId.systemDefault()).isBefore(LocalTime.of(9, 0))) today else today.plusDays(1)
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "$EXAM_WORK_PREFIX${exam.id}_${nextDate}",
+            "$EXAM_WORK_PREFIX${exam.id}_${targetDate}",
             ExistingWorkPolicy.KEEP,
             request
         )
     }
-
-    private fun nextMorningDelay(): Long = delayUntil(9, 0)
 
     private fun delayUntil(hour: Int, minute: Int): Long {
         val now = LocalDateTime.now()
@@ -153,18 +174,19 @@ internal object ReminderScheduler {
     }
 
     internal fun scheduleNextExamDay(context: Context, exam: LunaExam) {
-        enqueueExam(context, exam, nextMorningDelay())
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val targetDate = firstExamReminderDate(today, LocalTime.now(zone), exam.daysUntil(today)) ?: return
+        enqueueExam(context, exam, targetDate)
     }
 
     private fun ensureNotificationChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Luna reminders",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply { description = "Optional chat and exam reminders from Luna." }
-            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Luna reminders",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply { description = "Optional chat and exam reminders from Luna." }
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     internal const val CHANNEL_ID = "luna_reminders"
@@ -195,26 +217,31 @@ class LunaReminderWorker(context: Context, parameters: WorkerParameters) : Worke
         val exam = ExamStore(applicationContext).all().firstOrNull { it.id == id } ?: return Result.success()
         val daysLeft = exam.daysUntil()
         if (isExamReminderDay(daysLeft)) {
-            val timing = when (daysLeft) {
-                0L -> "today"
-                1L -> "tomorrow"
-                else -> "in $daysLeft days"
+            val today = LocalDate.now()
+            if (ReminderPreferences.examNotifiedOn(applicationContext, exam.id) != today.toString()) {
+                val timing = when (daysLeft) {
+                    0L -> "today"
+                    1L -> "tomorrow"
+                    else -> "in $daysLeft days"
+                }
+                val posted = postNotification(
+                    exam.id.hashCode() and Int.MAX_VALUE,
+                    "${exam.title} exam $timing",
+                    "Your ${exam.title} exam is $timing. Luna is here if you’d like to talk or plan a small step."
+                )
+                if (posted) ReminderPreferences.recordExamNotification(applicationContext, exam.id, today)
             }
-            postNotification(
-                exam.id.hashCode() and Int.MAX_VALUE,
-                "${exam.title} exam $timing",
-                "Your ${exam.title} exam is $timing. Luna is here if you’d like to talk or plan a small step."
-            )
         }
         if (daysLeft > 0) ReminderScheduler.scheduleNextExamDay(applicationContext, exam)
         return Result.success()
     }
 
-    private fun postNotification(id: Int, title: String, message: String) {
+    private fun postNotification(id: Int, title: String, message: String): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return
-        if (!NotificationManagerCompat.from(applicationContext).areNotificationsEnabled()) return
+        ) return false
+        val notificationManager = NotificationManagerCompat.from(applicationContext)
+        if (!notificationManager.areNotificationsEnabled()) return false
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -233,7 +260,8 @@ class LunaReminderWorker(context: Context, parameters: WorkerParameters) : Worke
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
-        NotificationManagerCompat.from(applicationContext).notify(id, notification)
+        notificationManager.notify(id, notification)
+        return true
     }
 }
 
