@@ -1,0 +1,11 @@
+{
+  "name": "luna-ai-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.mjs",
+    "test": "node --test"
+  }
+}
