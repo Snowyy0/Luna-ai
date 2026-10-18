@@ -1,0 +1,9 @@
+`luna.png` was generated using the built-in Imagegen tool for this app.
+
+`luna_calm.png` and `luna_love.png` are built-in Imagegen edits of `luna.png`, preserving the same kitten identity on transparent backgrounds.
+
+Calm prompt: Keep exactly the same lilac kitten identity, purple fur, cream muzzle and belly, daisy at ear, collar with heart, soft illustrated rendering. Change only the pose and expression: sitting cross-legged in a calm meditation pose, both front paws together at chest, both eyes closed gently, small content smile. Full body centered, entire ears and tail visible. Transparent background with faint ground shadow only. No UI, no text, no other objects.
+
+Love prompt: Keep the exact kitten identity, lilac purple fluffy fur, cream white muzzle belly and paws, daisy flower at ear, pink ears, purple heart collar, soft pastel illustration. Change pose: kitten sitting, both arms hugging one big plush pink heart against chest, eyes closed with delighted happy smile. Whole body, ears and curled tail fully visible, centered with margins. Transparent background with a subtle lavender ground shadow. No text, no UI.
+
+Prompt: Use case: illustration-story. Asset type: transparent mascot PNG for a React Native wellbeing app. Create a single cute full-body purple lilac kitten, inspired by the user's reference: enormous glossy dark purple eyes with white highlights, cream white muzzle and belly, pink inner ears and paw pads, soft lavender fluffy fur with purple outline, little white daisy with yellow center at one ear, purple collar with pink heart pendant. Sitting/standing happily waving one front paw, curling tail to the left, joyful little open mouth. Polished pastel 2D storybook game illustration with soft shaded volumes. Centered whole kitten, ear and tail and paw fully in frame, occupying 85 percent of square canvas. Truly transparent background, faint lavender ground shadow only. No words, no UI, no border, no other objects.
