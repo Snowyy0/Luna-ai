@@ -52,18 +52,33 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import java.time.Instant
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val Lilac = Color(0xFFA593C7)
 private val Ink = Color(0xFF35313E)
-private enum class Screen { Welcome, Home, Calendar, Profile }
+private val CalendarRed = Color(0xFFE34C4C)
+private enum class Screen { Welcome, Home, Profile }
+
+internal fun calendarWeeks(month: YearMonth, firstDayOfWeek: DayOfWeek): List<List<LocalDate?>> {
+    val first = month.atDay(1)
+    val leadingDays = (first.dayOfWeek.value - firstDayOfWeek.value + 7) % 7
+    val cellCount = ((leadingDays + month.lengthOfMonth() + 6) / 7) * 7
+    return (0 until cellCount).chunked(7).map { week ->
+        week.map { index ->
+            val day = index - leadingDays + 1
+            if (day in 1..month.lengthOfMonth()) month.atDay(day) else null
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LunaApp(chat: ChatModel) {
+fun LunaApp(chat: ChatModel, onDictate: () -> Unit) {
     val context = LocalContext.current.applicationContext
     val examStore = remember { ExamStore(context) }
     val exams = remember { mutableStateOf(examStore.all().sortedBy { it.date }) }
@@ -106,7 +121,7 @@ fun LunaApp(chat: ChatModel) {
         onSurfaceVariant = Color(0xFF827A8D), secondaryContainer = Color(0xFFEAE5F3)
     )
 
-    BackHandler(screen != Screen.Welcome && screen != Screen.Home) { screen = Screen.Home }
+    BackHandler(screen == Screen.Profile) { screen = Screen.Home }
     MaterialTheme(colorScheme = colors) {
         CompositionLocalProvider(LocalContentColor provides colors.onSurface) {
             Box(Modifier.fillMaxSize().background(colors.background)) {
@@ -122,21 +137,31 @@ fun LunaApp(chat: ChatModel) {
                             Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Luna", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (screen == Screen.Profile) "Settings" else "Luna",
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                             Spacer(Modifier.weight(1f))
-                            TextButton(onClick = { screen = Screen.Profile }) { Text("Settings") }
+                            TextButton(onClick = {
+                                screen = if (screen == Screen.Profile) Screen.Home else Screen.Profile
+                            }) {
+                                Text(if (screen == Screen.Profile) "Done" else "Settings")
+                            }
                         }
                         Box(Modifier.weight(1f)) {
                             when (screen) {
-                                Screen.Home -> ChatScreen(chat) { screen = Screen.Profile }
-                                Screen.Calendar -> CalendarScreen(
+                                Screen.Home -> ChatScreen(
+                                    chat = chat,
                                     exams = exams.value,
-                                    onAdd = { title, date ->
+                                    onDictate = onDictate,
+                                    onSettings = { screen = Screen.Profile },
+                                    onAddExam = { title, date ->
                                         val exam = examStore.add(title, date)
                                         exams.value = examStore.all().sortedBy { it.date }
                                         ReminderScheduler.scheduleExam(context, exam)
                                     },
-                                    onRemove = { id ->
+                                    onRemoveExam = { id ->
                                         examStore.remove(id)
                                         ReminderScheduler.cancelExam(context, id)
                                         exams.value = examStore.all().sortedBy { it.date }
@@ -156,20 +181,6 @@ fun LunaApp(chat: ChatModel) {
                                     onTokenChange = { chat.sessionToken = it }
                                 )
                                 Screen.Welcome -> Unit
-                            }
-                        }
-                        Surface(
-                            Modifier.padding(horizontal = 23.dp, vertical = 10.dp).fillMaxWidth(),
-                            shape = CircleShape, color = colors.surface, shadowElevation = 9.dp
-                        ) {
-                            Row(
-                                Modifier.padding(5.dp),
-                                horizontalArrangement = Arrangement.SpaceAround,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                NavButton(Icons.Rounded.Home, "Home", screen == Screen.Home) { screen = Screen.Home }
-                                NavButton(Icons.Rounded.CalendarMonth, "Exam calendar", screen == Screen.Calendar) { screen = Screen.Calendar }
-                                NavButton(Icons.Rounded.Person, "Profile", screen == Screen.Profile) { screen = Screen.Profile }
                             }
                         }
                     }
@@ -230,7 +241,14 @@ private fun WelcomeScreen(onContinue: () -> Unit) {
 }
 
 @Composable
-private fun ChatScreen(chat: ChatModel, onSettings: () -> Unit) {
+private fun ChatScreen(
+    chat: ChatModel,
+    exams: List<LunaExam>,
+    onDictate: () -> Unit,
+    onSettings: () -> Unit,
+    onAddExam: (String, LocalDate) -> Unit,
+    onRemoveExam: (String) -> Unit
+) {
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -276,118 +294,251 @@ private fun ChatScreen(chat: ChatModel, onSettings: () -> Unit) {
                 if (chat.busy) CircularProgressIndicator(
                     Modifier.padding(12.dp).size(25.dp).semantics { contentDescription = "Luna is thinking" },
                     strokeWidth = 2.dp
-                ) else RoundButton(
-                    Icons.AutoMirrored.Rounded.ArrowForward,
-                    "Send message",
-                    { chat.send(chat.draft) },
-                    accent = true
-                )
+                ) else {
+                    if (chat.draft.isBlank()) {
+                        RoundButton(Icons.Rounded.Mic, "Dictate a message", onDictate)
+                    } else {
+                        RoundButton(
+                            Icons.AutoMirrored.Rounded.ArrowForward,
+                            "Send message",
+                            { chat.send(chat.draft) },
+                            accent = true
+                        )
+                    }
+                }
             }
         }
-        Text(
-            "An AI companion, not a therapist.",
-            Modifier.fillMaxWidth().padding(top = 10.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            textAlign = TextAlign.Center
-        )
+        ExamCalendar(exams, onAddExam, onRemoveExam)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CalendarScreen(
+private fun ExamCalendar(
     exams: List<LunaExam>,
     onAdd: (String, LocalDate) -> Unit,
     onRemove: (String) -> Unit
 ) {
-    var title by rememberSaveable { mutableStateOf("") }
-    var dateMillis by rememberSaveable {
-        mutableStateOf(LocalDate.now().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
-    }
+    val today = LocalDate.now()
+    var selectedDateText by rememberSaveable { mutableStateOf(today.toString()) }
+    var displayedMonthText by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
+    var showAddDialog by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var title by rememberSaveable { mutableStateOf("") }
+    var eventDateText by rememberSaveable { mutableStateOf(today.toString()) }
     var error by remember { mutableStateOf<String?>(null) }
-    val dateFormatter = remember { DateTimeFormatter.ofPattern("EEE, MMM d, yyyy", Locale.getDefault()) }
-    val selectedDate = Instant.ofEpochMilli(dateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+    val selectedDate = LocalDate.parse(selectedDateText)
+    val displayedMonth = YearMonth.parse(displayedMonthText)
+    val locale = Locale.getDefault()
+    val monthFormatter = remember(locale) { DateTimeFormatter.ofPattern("LLLL yyyy", locale) }
+    val dayFormatter = remember(locale) { DateTimeFormatter.ofPattern("EEEE, MMMM d", locale) }
+    val firstDayOfWeek = remember(locale) { java.time.temporal.WeekFields.of(locale).firstDayOfWeek }
+    val weeks = remember(displayedMonth, firstDayOfWeek) { calendarWeeks(displayedMonth, firstDayOfWeek) }
+    val weekdayLabels = remember(firstDayOfWeek, locale) {
+        (0..6).map { firstDayOfWeek.plus(it.toLong()).getDisplayName(java.time.format.TextStyle.NARROW, locale) }
+    }
+    val dayExams = exams.filter { it.date == selectedDate.toString() }
+    val cardColor = MaterialTheme.colorScheme.surface
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Exam calendar", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Caption("Add your exam dates. Luna will remind you each morning during the final 7 days.")
+    Column(Modifier.fillMaxWidth().heightIn(max = 385.dp).verticalScroll(rememberScrollState())) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(25.dp),
+            color = cardColor,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, Color.White.copy(alpha = .68f)),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it.take(80); error = null },
-                    label = { Text("Exam name or course") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Rounded.CalendarMonth, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(selectedDate.format(dateFormatter))
-                }
-                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
-                LunaButton("Add exam", enabled = title.isNotBlank()) {
-                    if (selectedDate < LocalDate.now()) {
-                        error = "Choose today or a future date."
-                    } else {
-                        onAdd(title, selectedDate)
-                        title = ""
-                        error = null
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Calendar", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "EXAMS",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.4.sp
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            title = ""
+                            eventDateText = selectedDate.toString()
+                            error = null
+                            showAddDialog = true
+                        },
+                        modifier = Modifier.size(38.dp).semantics { contentDescription = "Add exam" }
+                    ) {
+                        Icon(Icons.Rounded.Add, null, tint = CalendarRed)
                     }
                 }
-            }
-        }
-        if (exams.isEmpty()) {
-            Caption("Your calendar is empty. Add an exam above to keep its date close.")
-        } else {
-            exams.forEach { exam ->
-                val date = LocalDate.parse(exam.date)
-                val daysLeft = exam.daysUntil()
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        Modifier.padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(exam.title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                            Text(date.format(dateFormatter), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                when {
-                                    daysLeft < 0 -> "Past exam"
-                                    daysLeft == 0L -> "Today"
-                                    daysLeft == 1L -> "Tomorrow"
-                                    else -> "In $daysLeft days"
-                                },
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Medium
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        displayedMonth.format(monthFormatter).replaceFirstChar { it.titlecase(locale) },
+                        Modifier.weight(1f),
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick = { displayedMonthText = displayedMonth.minusMonths(1).toString() },
+                        modifier = Modifier.size(36.dp).semantics { contentDescription = "Previous month" }
+                    ) { Icon(Icons.Rounded.ChevronLeft, null) }
+                    IconButton(
+                        onClick = { displayedMonthText = displayedMonth.plusMonths(1).toString() },
+                        modifier = Modifier.size(36.dp).semantics { contentDescription = "Next month" }
+                    ) { Icon(Icons.Rounded.ChevronRight, null) }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 2.dp)) {
+                    weekdayLabels.forEach { weekday ->
+                        Text(
+                            weekday,
+                            Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                weeks.forEach { week ->
+                    Row(Modifier.fillMaxWidth()) {
+                        week.forEach { date ->
+                            Box(
+                                Modifier.weight(1f).height(34.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (date != null) {
+                                    val isSelected = date == selectedDate
+                                    val isToday = date == today
+                                    val hasExam = exams.any { it.date == date.toString() }
+                                    Column(
+                                        Modifier.size(33.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isSelected) CalendarRed else Color.Transparent)
+                                            .then(
+                                                if (isToday && !isSelected) Modifier.border(1.dp, CalendarRed, CircleShape)
+                                                else Modifier
+                                            )
+                                            .clickable {
+                                                selectedDateText = date.toString()
+                                                displayedMonthText = YearMonth.from(date).toString()
+                                            },
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            date.dayOfMonth.toString(),
+                                            color = when {
+                                                isSelected -> Color.White
+                                                isToday -> CalendarRed
+                                                date.month == displayedMonth.month -> MaterialTheme.colorScheme.onSurface
+                                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f)
+                                            },
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal,
+                                            lineHeight = 15.sp
+                                        )
+                                        Box(
+                                            Modifier.size(4.dp).clip(CircleShape).background(
+                                                if (hasExam && !isSelected) CalendarRed else Color.Transparent
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 7.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .08f)
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        selectedDate.format(dayFormatter).replaceFirstChar { it.titlecase(locale) },
+                        Modifier.weight(1f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (dayExams.isEmpty()) {
+                        Text("No exams", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    }
+                }
+                dayExams.forEach { exam ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(CalendarRed))
+                        Text(exam.title, Modifier.weight(1f).padding(start = 8.dp), fontSize = 13.sp)
+                        IconButton(
+                            onClick = { onRemove(exam.id) },
+                            modifier = Modifier.size(30.dp).semantics { contentDescription = "Remove ${exam.title}" }
+                        ) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
-                        IconButton(onClick = { onRemove(exam.id) }) {
-                            Icon(Icons.Rounded.DeleteOutline, "Remove ${exam.title}")
-                        }
                     }
                 }
+                Text(
+                    "An AI companion, not a therapist.",
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.Center
+                )
             }
         }
-        Spacer(Modifier.height(8.dp))
     }
 
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Add an exam") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it.take(80); error = null },
+                        label = { Text("Exam or course name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.CalendarMonth, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(LocalDate.parse(eventDateText).format(dayFormatter))
+                    }
+                    if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = title.isNotBlank(),
+                    onClick = {
+                        val date = LocalDate.parse(eventDateText)
+                        if (date < LocalDate.now()) {
+                            error = "Choose today or a future date."
+                        } else {
+                            onAdd(title.trim(), date)
+                            selectedDateText = date.toString()
+                            displayedMonthText = YearMonth.from(date).toString()
+                            showAddDialog = false
+                        }
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Cancel") } }
+        )
+    }
     if (showDatePicker) {
+        val initialDate = LocalDate.parse(eventDateText).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         val picker = rememberDatePickerState(
-            initialSelectedDateMillis = dateMillis,
+            initialSelectedDateMillis = initialDate,
             selectableDates = object : SelectableDates {
                 override fun isSelectableDate(utcTimeMillis: Long): Boolean =
                     Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneOffset.UTC).toLocalDate() >= LocalDate.now()
@@ -399,11 +550,14 @@ private fun CalendarScreen(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    picker.selectedDateMillis?.let { dateMillis = it }
+                    picker.selectedDateMillis?.let {
+                        eventDateText = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                    }
                     showDatePicker = false
-                }) { Text("Choose date") }
+                }) { Text("Done") }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
+            modifier = Modifier
         ) { DatePicker(state = picker) }
     }
 }
@@ -482,16 +636,6 @@ private fun RoundButton(icon: ImageVector, label: String, onClick: () -> Unit, a
         Box(contentAlignment = Alignment.Center) {
             Icon(icon, label, Modifier.size(25.dp), tint = if (accent) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-}
-
-@Composable
-private fun NavButton(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
-    IconButton(onClick, Modifier.size(48.dp).semantics { this.selected = selected; role = Role.Tab }) {
-        Icon(
-            icon, label,
-            tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .65f)
-        )
     }
 }
 

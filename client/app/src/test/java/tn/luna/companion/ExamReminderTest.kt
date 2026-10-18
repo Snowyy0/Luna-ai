@@ -4,8 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.YearMonth
 
 class ExamReminderTest {
     @Test
@@ -32,5 +34,19 @@ class ExamReminderTest {
         assertEquals(today, firstExamReminderDate(today, LocalTime.of(8, 0), 0))
         assertEquals(today.plusDays(1), firstExamReminderDate(today, LocalTime.of(10, 0), 7))
         assertEquals(null, firstExamReminderDate(today, LocalTime.NOON, -1))
+    }
+
+    @Test
+    fun calendarGridStartsWeeksOnTheSelectedWeekdayAndIncludesEveryDay() {
+        val february = calendarWeeks(YearMonth.of(2024, 2), DayOfWeek.MONDAY)
+        val november = calendarWeeks(YearMonth.of(2026, 11), DayOfWeek.MONDAY)
+
+        assertEquals(5, february.size)
+        assertEquals(null, february.first().first())
+        assertEquals(LocalDate.of(2024, 2, 1), february[0][3])
+        assertEquals(LocalDate.of(2024, 2, 29), february.last()[3])
+        assertEquals(6, november.size)
+        assertEquals(LocalDate.of(2026, 11, 1), november.first()[6])
+        assertEquals(LocalDate.of(2026, 11, 30), november.last()[0])
     }
 }
