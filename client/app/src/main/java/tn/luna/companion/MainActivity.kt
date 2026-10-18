@@ -1,17 +1,9 @@
 package tn.luna.companion
 
 import android.os.Bundle
-import android.app.Activity
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.speech.RecognizerIntent
-import android.speech.tts.TextToSpeech
-import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,7 +16,6 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
-import java.util.Locale
 
 data class ChatRequest(val message: String, val language: String = "en", val use_history: Boolean = false)
 data class ChatReply(val reply: String)
@@ -34,9 +25,25 @@ interface LunaApi {
     suspend fun reply(@Body request: ChatRequest, @Header("Authorization") authorization: String? = null): ChatReply
 }
 
+internal fun lunaApiBaseUrl(fingerprint: String, model: String, hardware: String): String {
+    val isEmulator = fingerprint.startsWith("generic", ignoreCase = true) ||
+        fingerprint.startsWith("unknown", ignoreCase = true) ||
+        model.contains("emulator", ignoreCase = true) ||
+        model.contains("Android SDK built for", ignoreCase = true) ||
+        model.contains("sdk_gphone", ignoreCase = true) ||
+        hardware in setOf("goldfish", "ranchu", "vbox86")
+    return if (isEmulator) "http://10.0.2.2:8787/" else "http://127.0.0.1:8787/"
+}
+
 class ChatModel : ViewModel() {
     private val api = Retrofit.Builder()
-        .baseUrl("http://127.0.0.1:8787/")
+        .baseUrl(
+            lunaApiBaseUrl(
+                android.os.Build.FINGERPRINT.orEmpty(),
+                android.os.Build.MODEL.orEmpty(),
+                android.os.Build.HARDWARE.orEmpty()
+            )
+        )
         .addConverterFactory(GsonConverterFactory.create())
         .build().create(LunaApi::class.java)
     var reply by mutableStateOf("Hi, I'm Luna. How are you feeling today?")
@@ -95,50 +102,18 @@ class ChatModel : ViewModel() {
 }
 
 class MainActivity : ComponentActivity() {
-    private var speech: TextToSpeech? = null
-    private var speechReady = false
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        speech = TextToSpeech(this) { status -> speechReady = status == TextToSpeech.SUCCESS }
+        ReminderScheduler.sync(this)
         setContent {
             val chat: ChatModel = viewModel()
-            val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-                if (result.resultCode == Activity.RESULT_OK) {
-                    result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let {
-                        chat.draft = it.take(2000)
-                    }
-                }
-            }
-            LunaApp(chat,
-                onDictate = {
-                    try {
-                        dictate.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, chat.language)
-                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Luna what’s on your mind")
-                        })
-                    } catch (_: ActivityNotFoundException) {
-                        Toast.makeText(this, "Voice input is unavailable. You can still type a message.", Toast.LENGTH_LONG).show()
-                    } catch (_: SecurityException) {
-                        Toast.makeText(this, "Voice input was not allowed. You can still type a message.", Toast.LENGTH_LONG).show()
-                    }
-                },
-                onSpeak = {
-                    val engine = speech
-                    if (engine?.isSpeaking == true) engine.stop()
-                    else if (!speechReady || engine == null || engine.setLanguage(Locale.forLanguageTag(chat.language)) < 0) {
-                        Toast.makeText(this, "Speech for this language is unavailable on this device.", Toast.LENGTH_LONG).show()
-                    } else if (engine.speak(chat.reply, TextToSpeech.QUEUE_FLUSH, null, "luna-reply") == TextToSpeech.ERROR) {
-                        Toast.makeText(this, "Luna could not play this reply. Please try again.", Toast.LENGTH_LONG).show()
-                    }
-                },
-                onStopSpeaking = { speech?.stop() }
-            )
+            LunaApp(chat)
         }
     }
 
-    override fun onStop() { speech?.stop(); super.onStop() }
-    override fun onDestroy() { speech?.shutdown(); super.onDestroy() }
+    override fun onResume() {
+        super.onResume()
+        ReminderPreferences.recordActivity(this)
+    }
 }

@@ -13,6 +13,21 @@ import retrofit2.converter.gson.GsonConverterFactory
 import com.google.gson.JsonParser
 
 class ChatModelTest {
+    @Test fun apiBaseUrlUsesEmulatorHostBridgeOnlyForEmulators() {
+        assertEquals(
+            "http://10.0.2.2:8787/",
+            lunaApiBaseUrl("google/sdk_gphone64_x86_64/generic", "sdk_gphone64_x86_64", "ranchu")
+        )
+        assertEquals(
+            "http://10.0.2.2:8787/",
+            lunaApiBaseUrl("generic/sdk/generic", "Android SDK built for x86", "unknown")
+        )
+        assertEquals(
+            "http://127.0.0.1:8787/",
+            lunaApiBaseUrl("samsung/a54xx/a54", "SM-A546B", "exynos")
+        )
+    }
+
     @Test fun requestsIncludeTheSessionTokenOnlyWhenProvided() = runBlocking {
         val headers = mutableListOf<String?>()
         val client = OkHttpClient.Builder().addInterceptor { chain ->
