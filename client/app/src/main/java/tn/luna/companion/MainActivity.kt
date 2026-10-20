@@ -1,9 +1,16 @@
 package tn.luna.companion
 
 import android.os.Bundle
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -108,7 +115,26 @@ class MainActivity : ComponentActivity() {
         ReminderScheduler.sync(this)
         setContent {
             val chat: ChatModel = viewModel()
-            LunaApp(chat)
+            val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (result.resultCode == Activity.RESULT_OK) {
+                    result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let {
+                        chat.draft = it.take(2000)
+                    }
+                }
+            }
+            LunaApp(chat, onDictate = {
+                try {
+                    dictate.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, chat.language)
+                        putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Luna what’s on your mind")
+                    })
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this, "Voice input is unavailable. You can still type a message.", Toast.LENGTH_LONG).show()
+                } catch (_: SecurityException) {
+                    Toast.makeText(this, "Voice input was not allowed. You can still type a message.", Toast.LENGTH_LONG).show()
+                }
+            })
         }
     }
 

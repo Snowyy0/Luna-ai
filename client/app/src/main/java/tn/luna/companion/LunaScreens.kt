@@ -2,8 +2,10 @@ package tn.luna.companion
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,15 +51,38 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import java.time.Instant
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private val Lilac = Color(0xFFA593C7)
 private val Ink = Color(0xFF35313E)
-private enum class Screen { Home, Profile }
+private val CalendarRed = Color(0xFFE34C4C)
+private enum class Screen { Welcome, Home, Profile }
 
+internal fun calendarWeeks(month: YearMonth, firstDayOfWeek: DayOfWeek): List<List<LocalDate?>> {
+    val first = month.atDay(1)
+    val leadingDays = (first.dayOfWeek.value - firstDayOfWeek.value + 7) % 7
+    val cellCount = ((leadingDays + month.lengthOfMonth() + 6) / 7) * 7
+    return (0 until cellCount).chunked(7).map { week ->
+        week.map { index ->
+            val day = index - leadingDays + 1
+            if (day in 1..month.lengthOfMonth()) month.atDay(day) else null
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LunaApp(chat: ChatModel) {
+fun LunaApp(chat: ChatModel, onDictate: () -> Unit) {
     val context = LocalContext.current.applicationContext
-    var screen by rememberSaveable { mutableStateOf(Screen.Home) }
+    val examStore = remember { ExamStore(context) }
+    val exams = remember { mutableStateOf(examStore.all().sortedBy { it.date }) }
+    var screen by rememberSaveable { mutableStateOf(Screen.Welcome) }
     var dark by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("Youssef") }
     val remindersEnabled = remember { mutableStateOf(ReminderPreferences.enabled(context)) }
@@ -105,30 +130,58 @@ fun LunaApp(chat: ChatModel) {
                     Modifier.fillMaxSize().safeDrawingPadding().imePadding().widthIn(max = 560.dp)
                         .align(Alignment.TopCenter)
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Luna", fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { screen = Screen.Profile }) { Text("Settings") }
-                    }
-                    Box(Modifier.weight(1f)) {
-                        when (screen) {
-                            Screen.Home -> ChatScreen(chat) { screen = Screen.Profile }
-                            Screen.Profile -> ProfileScreen(
-                                name = name,
-                                remindersEnabled = remindersEnabled.value,
-                                notificationsAllowed = notificationsAllowed(context),
-                                dark = dark,
-                                language = chat.language,
-                                sessionToken = chat.sessionToken,
-                                onNameChange = { name = it },
-                                onRemindersChange = updateReminders,
-                                onDarkChange = { dark = it },
-                                onLanguageChange = { chat.language = it },
-                                onTokenChange = { chat.sessionToken = it }
+                    if (screen == Screen.Welcome) {
+                        WelcomeScreen { screen = Screen.Home }
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (screen == Screen.Profile) "Settings" else "Luna",
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.Bold
                             )
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = {
+                                screen = if (screen == Screen.Profile) Screen.Home else Screen.Profile
+                            }) {
+                                Text(if (screen == Screen.Profile) "Done" else "Settings")
+                            }
+                        }
+                        Box(Modifier.weight(1f)) {
+                            when (screen) {
+                                Screen.Home -> ChatScreen(
+                                    chat = chat,
+                                    exams = exams.value,
+                                    onDictate = onDictate,
+                                    onSettings = { screen = Screen.Profile },
+                                    onAddExam = { title, date ->
+                                        val exam = examStore.add(title, date)
+                                        exams.value = examStore.all().sortedBy { it.date }
+                                        ReminderScheduler.scheduleExam(context, exam)
+                                    },
+                                    onRemoveExam = { id ->
+                                        examStore.remove(id)
+                                        ReminderScheduler.cancelExam(context, id)
+                                        exams.value = examStore.all().sortedBy { it.date }
+                                    }
+                                )
+                                Screen.Profile -> ProfileScreen(
+                                    name = name,
+                                    remindersEnabled = remindersEnabled.value,
+                                    notificationsAllowed = notificationsAllowed(context),
+                                    dark = dark,
+                                    language = chat.language,
+                                    sessionToken = chat.sessionToken,
+                                    onNameChange = { name = it },
+                                    onRemindersChange = updateReminders,
+                                    onDarkChange = { dark = it },
+                                    onLanguageChange = { chat.language = it },
+                                    onTokenChange = { chat.sessionToken = it }
+                                )
+                                Screen.Welcome -> Unit
+                            }
                         }
                     }
                 }
@@ -169,7 +222,33 @@ private fun Kitten(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ChatScreen(chat: ChatModel, onSettings: () -> Unit) {
+private fun WelcomeScreen(onContinue: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(55.dp))
+        Kitten(Modifier.fillMaxWidth().heightIn(max = 360.dp).aspectRatio(1f))
+        Spacer(Modifier.height(36.dp))
+        Text("Hi, I’m Luna", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        Caption("A little company for everyday chats and the moments ahead.", centered = true)
+        Spacer(Modifier.height(30.dp))
+        LunaButton("Continue", onClick = onContinue)
+        Spacer(Modifier.height(15.dp))
+        Caption("Chat, keep track of exams, and get gentle reminders.", centered = true)
+    }
+}
+
+@Composable
+private fun ChatScreen(
+    chat: ChatModel,
+    exams: List<LunaExam>,
+    onDictate: () -> Unit,
+    onSettings: () -> Unit,
+    onAddExam: (String, LocalDate) -> Unit,
+    onRemoveExam: (String) -> Unit
+) {
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -215,21 +294,271 @@ private fun ChatScreen(chat: ChatModel, onSettings: () -> Unit) {
                 if (chat.busy) CircularProgressIndicator(
                     Modifier.padding(12.dp).size(25.dp).semantics { contentDescription = "Luna is thinking" },
                     strokeWidth = 2.dp
-                ) else RoundButton(
-                    Icons.AutoMirrored.Rounded.ArrowForward,
-                    "Send message",
-                    { chat.send(chat.draft) },
-                    accent = true
+                ) else {
+                    if (chat.draft.isBlank()) {
+                        RoundButton(Icons.Rounded.Mic, "Dictate a message", onDictate)
+                    } else {
+                        RoundButton(
+                            Icons.AutoMirrored.Rounded.ArrowForward,
+                            "Send message",
+                            { chat.send(chat.draft) },
+                            accent = true
+                        )
+                    }
+                }
+            }
+        }
+        ExamCalendar(exams, onAddExam, onRemoveExam)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExamCalendar(
+    exams: List<LunaExam>,
+    onAdd: (String, LocalDate) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    val today = LocalDate.now()
+    var selectedDateText by rememberSaveable { mutableStateOf(today.toString()) }
+    var displayedMonthText by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showDatePicker by remember { mutableStateOf(false) }
+    var title by rememberSaveable { mutableStateOf("") }
+    var eventDateText by rememberSaveable { mutableStateOf(today.toString()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val selectedDate = LocalDate.parse(selectedDateText)
+    val displayedMonth = YearMonth.parse(displayedMonthText)
+    val locale = Locale.getDefault()
+    val monthFormatter = remember(locale) { DateTimeFormatter.ofPattern("LLLL yyyy", locale) }
+    val dayFormatter = remember(locale) { DateTimeFormatter.ofPattern("EEEE, MMMM d", locale) }
+    val firstDayOfWeek = remember(locale) { java.time.temporal.WeekFields.of(locale).firstDayOfWeek }
+    val weeks = remember(displayedMonth, firstDayOfWeek) { calendarWeeks(displayedMonth, firstDayOfWeek) }
+    val weekdayLabels = remember(firstDayOfWeek, locale) {
+        (0..6).map { firstDayOfWeek.plus(it.toLong()).getDisplayName(java.time.format.TextStyle.NARROW, locale) }
+    }
+    val dayExams = exams.filter { it.date == selectedDate.toString() }
+    val cardColor = MaterialTheme.colorScheme.surface
+
+    Column(Modifier.fillMaxWidth().heightIn(max = 385.dp).verticalScroll(rememberScrollState())) {
+        Surface(
+            shape = RoundedCornerShape(25.dp),
+            color = cardColor,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, Color.White.copy(alpha = .68f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Calendar", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "EXAMS",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.4.sp
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            title = ""
+                            eventDateText = selectedDate.toString()
+                            error = null
+                            showAddDialog = true
+                        },
+                        modifier = Modifier.size(38.dp).semantics { contentDescription = "Add exam" }
+                    ) {
+                        Icon(Icons.Rounded.Add, null, tint = CalendarRed)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        displayedMonth.format(monthFormatter).replaceFirstChar { it.titlecase(locale) },
+                        Modifier.weight(1f),
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick = { displayedMonthText = displayedMonth.minusMonths(1).toString() },
+                        modifier = Modifier.size(36.dp).semantics { contentDescription = "Previous month" }
+                    ) { Icon(Icons.Rounded.ChevronLeft, null) }
+                    IconButton(
+                        onClick = { displayedMonthText = displayedMonth.plusMonths(1).toString() },
+                        modifier = Modifier.size(36.dp).semantics { contentDescription = "Next month" }
+                    ) { Icon(Icons.Rounded.ChevronRight, null) }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 2.dp)) {
+                    weekdayLabels.forEach { weekday ->
+                        Text(
+                            weekday,
+                            Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                weeks.forEach { week ->
+                    Row(Modifier.fillMaxWidth()) {
+                        week.forEach { date ->
+                            Box(
+                                Modifier.weight(1f).height(34.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (date != null) {
+                                    val isSelected = date == selectedDate
+                                    val isToday = date == today
+                                    val hasExam = exams.any { it.date == date.toString() }
+                                    Column(
+                                        Modifier.size(33.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isSelected) CalendarRed else Color.Transparent)
+                                            .then(
+                                                if (isToday && !isSelected) Modifier.border(1.dp, CalendarRed, CircleShape)
+                                                else Modifier
+                                            )
+                                            .clickable {
+                                                selectedDateText = date.toString()
+                                                displayedMonthText = YearMonth.from(date).toString()
+                                            },
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            date.dayOfMonth.toString(),
+                                            color = when {
+                                                isSelected -> Color.White
+                                                isToday -> CalendarRed
+                                                date.month == displayedMonth.month -> MaterialTheme.colorScheme.onSurface
+                                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f)
+                                            },
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal,
+                                            lineHeight = 15.sp
+                                        )
+                                        Box(
+                                            Modifier.size(4.dp).clip(CircleShape).background(
+                                                if (hasExam && !isSelected) CalendarRed else Color.Transparent
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 7.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .08f)
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        selectedDate.format(dayFormatter).replaceFirstChar { it.titlecase(locale) },
+                        Modifier.weight(1f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (dayExams.isEmpty()) {
+                        Text("No exams", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    }
+                }
+                dayExams.forEach { exam ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(CalendarRed))
+                        Text(exam.title, Modifier.weight(1f).padding(start = 8.dp), fontSize = 13.sp)
+                        IconButton(
+                            onClick = { onRemove(exam.id) },
+                            modifier = Modifier.size(30.dp).semantics { contentDescription = "Remove ${exam.title}" }
+                        ) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "An AI companion, not a therapist.",
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.Center
                 )
             }
         }
-        Text(
-            "An AI companion, not a therapist.",
-            Modifier.fillMaxWidth().padding(top = 10.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            textAlign = TextAlign.Center
+    }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Add an exam") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it.take(80); error = null },
+                        label = { Text("Exam or course name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.CalendarMonth, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(LocalDate.parse(eventDateText).format(dayFormatter))
+                    }
+                    if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = title.isNotBlank(),
+                    onClick = {
+                        val date = LocalDate.parse(eventDateText)
+                        if (date < LocalDate.now()) {
+                            error = "Choose today or a future date."
+                        } else {
+                            onAdd(title.trim(), date)
+                            selectedDateText = date.toString()
+                            displayedMonthText = YearMonth.from(date).toString()
+                            showAddDialog = false
+                        }
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Cancel") } }
         )
+    }
+    if (showDatePicker) {
+        val initialDate = LocalDate.parse(eventDateText).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val picker = rememberDatePickerState(
+            initialSelectedDateMillis = initialDate,
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                    Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneOffset.UTC).toLocalDate() >= LocalDate.now()
+
+                override fun isSelectableYear(year: Int): Boolean = year >= LocalDate.now().year
+            }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    picker.selectedDateMillis?.let {
+                        eventDateText = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                    }
+                    showDatePicker = false
+                }) { Text("Done") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
+            modifier = Modifier
+        ) { DatePicker(state = picker) }
     }
 }
 
@@ -247,20 +576,31 @@ private fun ProfileScreen(
     onLanguageChange: (String) -> Unit,
     onTokenChange: (String) -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 23.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         Text("Your settings", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         OutlinedTextField(name, onNameChange, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        SettingSwitch("Chat reminders", remindersEnabled, onRemindersChange)
+        SettingSwitch("Exam and chat reminders", remindersEnabled, onRemindersChange)
         Caption(
             if (notificationsAllowed) {
-                "A gentle chat reminder is sent at most once a day when you haven’t opened Luna."
+                "Exam reminders arrive at 9 AM during the final 7 days. A gentle chat reminder is sent at most once a day when you haven’t opened Luna."
             } else {
-                "Allow notifications to receive an occasional gentle chat reminder."
+                "Allow notifications to receive exam reminders at 9 AM during the final 7 days and an occasional gentle chat reminder."
             }
         )
+        if (remindersEnabled && !notificationsAllowed) {
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                )
+            }) {
+                Text("Open notification settings")
+            }
+        }
         SettingSwitch("Evening colors", dark, onDarkChange)
         Text("Luna’s reply language", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -279,7 +619,7 @@ private fun ProfileScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        Caption("Chat messages are sent individually to your Luna server.")
+        Caption("Your exam calendar is saved on this device. Chat messages are sent individually to your Luna server.")
     }
 }
 

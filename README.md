@@ -4,8 +4,9 @@ Native Android app built with Kotlin and Jetpack Compose. Open `client` in Andro
 
 The app focuses on a Luna chat, with an optional evening color theme and gentle reminders.
 
-- Chat reminders are gentle and sent at most once a day when you have not opened Luna.
-- Chat messages are sent individually to the configured Luna server.
+- Add and remove exam dates in the calendar. Exam reminders arrive at 9 AM each day during the final seven days, including exam day.
+- Opt in to exam and chat reminders in Profile. Chat reminders are gentle and sent at most once a day when you have not opened Luna.
+- Exam dates are stored on the device. Chat messages are sent individually to the configured Luna server.
 - Profile contains your name, reminder preferences, reply language, and the server session token.
 
 ## Build and check
